@@ -1,0 +1,77 @@
+Magpie SSH 远端接入 · 本地插件 v0.1.0
+
+用途
+在 Magpie 左侧的「SSH 远端接入」页面保存 SSH 服务器，把本机 Magpie
+反向转发到服务器。服务器无需安装 Magpie；远端 agent 通过隧道使用本地模型。
+
+安装
+插件支持从本地文件夹加载，无需发布到 npm。
+终端执行：
+magpie plugin add github:cliecy/magpie-ssh-remote
+
+随后在 Magpie 左侧「插件」分组打开「SSH 远端接入」。若页面尚未出现，
+在插件管理中关闭、重新启用本插件，或重新打开 Magpie 窗口。
+保留本文件夹，Magpie 直接从这里加载插件。
+
+使用
+1. 新建服务器，填写 SSH 别名，例如 my-server；已有的跳板机与密钥配置会沿用。
+2. 选择模型，保存配置，然后点击「连接」。
+3. 点击「刷新状态」，确认连接已建立。
+4. 对 Codex 或 Claude Code 点击「安装 / 更新」。
+5. 在服务器上的项目目录执行：
+   ~/.local/bin/codex-magpie
+   或 ~/.local/bin/claude-magpie
+启动命令支持追加 agent 参数，例如：
+   ~/.local/bin/codex-magpie -C /path/to/project
+
+修改模型后，保存、重新连接，并再次安装 / 更新启动命令。
+这些命令对本次启动设置 provider / 环境变量，原 agent 配置文件保留。
+可为不同服务器保存不同模型。一个服务器上每个 agent 只有一个本插件启动命令；
+在同一服务器从其他配置再次安装时，会更新该启动命令。
+
+连接行为
+默认：服务器 127.0.0.1:13425 → Mac 127.0.0.1:3425。
+通过服务器端 curl 读取模型列表验证隧道。SSH 断线后每 15 秒重试。
+Mac 睡眠期间连接中断，唤醒、联网后后台重试。
+点击「断开」后不再重试；保存修改会断开当前连接。
+关闭 / 删除本插件后，助手会关闭所管理的 SSH 隧道。
+退出 Magpie、其网关连续不可用超过 30 秒后，助手退出并关闭隧道。
+重新启用插件或打开 Magpie 后，之前保持连接的服务器会再次连接。
+界面状态是最近一次快照，需要点击「刷新状态」查看最新情况。
+
+首次连接
+本插件使用免交互 SSH，不弹出密码框，不自动接受未知主机指纹。
+首次请先在 Mac 终端执行 ssh 主机名，确认主机指纹及密钥登录可用。
+SSH agent、IdentityFile 和 ProxyJump 均由本机 OpenSSH 处理。
+服务器须允许反向 TCP 转发，并保留 GatewayPorts=no 或 clientspecified，
+以使指定的回环监听生效。服务器上的其他本机用户也可能访问此端口。
+
+实现与数据
+页面使用 Magpie 官方插件页面接口；后台由插件自动启动附带的 Python 助手。
+页面通过自身的 options 发送请求；助手通过 magpie plugin options 返回结果，
+不修改其他插件的选项，不增加模型供应商，不读取供应商密钥或订阅登录文件。
+隧道连接到本机 Magpie 回环接口，使用用于用量归属的占位 key；
+不向服务器复制供应商 API key 或订阅凭据。
+Mac 需要 Python 3、OpenSSH，服务器需要 curl、sh 及对应 agent。
+
+运行文件：~/.config/magpie/ssh-remote/
+  state.json：服务器配置及是否自动连接
+  worker.log：后台助手错误
+  <配置ID>.log：该连接的 SSH 错误
+临时 SSH 控制 socket 保存在 /tmp/magpie-ssh-<uid>-<配置摘要>/。
+若使用 XDG_CONFIG_HOME，运行文件跟随该目录。
+
+移除
+如不再需要服务器启动命令，先在页面分别点击「移除」。
+然后在 Magpie 的插件管理中移除本插件，或执行：
+magpie plugin rm magpie-ssh-remote
+移除插件会断开隧道；服务器配置留在本机运行目录，便于重新安装后恢复。
+
+验证
+已验证：Magpie 0.1.1600 可从本地目录加载插件与页面；真实助手请求响应；
+11 项自动测试；使用官方页面 bridge 与沙箱限制的浏览器交互测试。
+尚未选择具体服务器，因此未对你的真实服务器做 SSH 转发或 agent 推理测试。
+
+官方接口：
+https://usemagpie.ai/docs/plugins
+https://learn.chatgpt.com/docs/config-file/config-advanced

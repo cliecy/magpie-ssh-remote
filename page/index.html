@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SSH 远端接入</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="_magpie/bridge.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">MAGPIE · SSH</p><h1>把本地模型带到服务器</h1><p class="muted">通过 SSH 连接，在服务器上的 agent 中使用这台电脑的 Magpie。</p></div><button id="refresh">刷新状态</button></header>
+    <div id="notice" role="status" aria-live="polite">正在连接后台助手…</div>
+    <div class="layout">
+      <aside><div class="section-title"><h2>服务器</h2><button id="new">＋ 新建</button></div><div id="profiles"></div><p class="muted small">连接会在后台保持。断线后每 15 秒重试；关闭插件后断开。</p></aside>
+      <section class="editor">
+        <h2 id="editor-title">添加服务器</h2>
+        <div class="fields">
+          <label>显示名称<input id="name" placeholder="例如：实验室 GPU"></label>
+          <label>SSH 主机<input id="host" list="hosts" placeholder="my-server 或 user@host" autocomplete="off"><datalist id="hosts"></datalist></label>
+          <label>本地 Magpie 端口<input id="local-port" type="number" min="1" max="65535" value="3425"></label>
+          <label>服务器监听端口<input id="remote-port" type="number" min="1" max="65535" value="13425"></label>
+        </div>
+        <label>Agent 使用的模型<input id="model" list="models" value="group/default" placeholder="provider/model"><datalist id="models"></datalist></label>
+        <p class="muted small">沿用 ~/.ssh/config 中的密钥与跳板机。首次连接请先在终端 ssh 到该主机，确认指纹及免密登录。保存修改会断开当前连接。</p>
+        <div class="buttons"><button id="save" class="primary">保存配置</button><button id="connect">连接</button><button id="disconnect">断开</button><button id="delete" class="danger">删除</button></div>
+        <div id="connection" class="connection">保存后即可连接。</div>
+        <div class="agent-box">
+          <h2>接入服务器上的 agent</h2>
+          <p class="muted">安装独立启动命令。在服务器的项目目录执行它，即可使用上方模型。修改模型后，保存并重新安装启动命令。</p>
+          <div class="agent-row"><div><strong>Codex</strong><code>~/.local/bin/codex-magpie</code></div><div><button id="install-codex">安装 / 更新</button><button id="uninstall-codex" class="quiet">移除</button></div></div>
+          <div class="agent-row"><div><strong>Claude Code</strong><code>~/.local/bin/claude-magpie</code></div><div><button id="install-claude">安装 / 更新</button><button id="uninstall-claude" class="quiet">移除</button></div></div>
+          <p class="muted small">服务器需要已安装对应 agent 和 curl。原有 agent 配置保留。Mac 需保持联网，Magpie 需持续运行。</p>
+        </div>
+      </section>
+    </div>
+    <footer id="sample-time" class="muted small"></footer>
+  </main>
+</body>
+</html>
