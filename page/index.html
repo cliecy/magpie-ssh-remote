@@ -28,10 +28,13 @@
         <div id="connection" class="connection">保存后即可连接。</div>
         <div class="agent-box">
           <h2>接入服务器上的 agent</h2>
-          <p class="muted">安装独立启动命令。在服务器的项目目录执行它，即可使用上方模型。修改模型后，保存并重新安装启动命令。</p>
-          <div class="agent-row"><div><strong>Codex</strong><code>~/.local/bin/codex-magpie</code></div><div><button id="install-codex">安装 / 更新</button><button id="uninstall-codex" class="quiet">移除</button></div></div>
-          <div class="agent-row"><div><strong>Claude Code</strong><code>~/.local/bin/claude-magpie</code></div><div><button id="install-claude">安装 / 更新</button><button id="uninstall-claude" class="quiet">移除</button></div></div>
-          <p class="muted small">服务器需要已安装对应 agent 和 curl。原有 agent 配置保留。Mac 需保持联网，Magpie 需持续运行。</p>
+          <p class="muted">复用服务器 Magpie 本体的 agent 接入、模型同步和恢复逻辑。本体支持的 agent，可通过同一入口配置。</p>
+          <div class="buttons"><button id="native-inspect">检测本体及 agent</button><button id="native-setup">配置 / 启动远端 Magpie</button></div>
+          <p class="muted small">服务器需先安装 Magpie 和 curl。「配置 / 启动」会添加本机模型源；网关未运行时，使用本体的 daemon 命令启动服务。密钥与跳板机仍沿用 SSH 配置。</p>
+          <label>Magpie agent ID<input id="native-agent" list="native-agent-suggestions" value="pi" placeholder="例如 omp、pi、dsh，也可输入其他本体支持的 ID"><datalist id="native-agent-suggestions"><option value="omp"><option value="pi"><option value="dsh"><option value="codex"><option value="claude"><option value="opencode"><option value="gemini"><option value="goose"><option value="crush"><option value="zed"></datalist></label>
+          <div class="buttons"><button id="native-apply" class="primary">接入所选模型</button><button id="native-restore">通过本体恢复配置</button></div>
+          <pre id="native-report" class="muted small" style="white-space:pre-wrap;overflow-wrap:anywhere">检测后在这里显示服务器 Magpie 支持的 agent。列表由本体提供。</pre>
+          <p class="muted small">接入后按本体提示重启 agent，再直接运行原命令。新增 agent 支持随服务器 Magpie 版本更新，插件无需新增适配器。</p>
         </div>
       </section>
     </div>

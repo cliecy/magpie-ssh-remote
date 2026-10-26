@@ -17,6 +17,39 @@ import urllib.request
 MARKER = '# managed-by: magpie-ssh-remote v1'
 HOST = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.@:\-]*$')
 IDENT = re.compile(r'^[a-f0-9]{16}$')
+AGENT_ID = re.compile(r'^[a-z][a-z0-9._-]{0,79}$')
+
+
+def native_script(action, profile, agent=None):
+    """Delegate wiring and restoration to the server's own Magpie adapters."""
+    prefix = ('set -eu\n'
+        'mp=$(command -v magpie || true)\n'
+        'if [ -z "$mp" ] && [ -x "$HOME/.local/bin/magpie" ]; then mp="$HOME/.local/bin/magpie"; fi\n'
+        'if [ -z "$mp" ] && [ -x /Applications/magpie.app/Contents/MacOS/magpie ]; then mp=/Applications/magpie.app/Contents/MacOS/magpie; fi\n'
+        'if [ -z "$mp" ]; then echo "服务器未安装 Magpie。请先按官方安装说明安装，再重试。" >&2; exit 1; fi\n')
+    provider = 'ssh-desktop-' + profile['id']
+    if action == 'native-inspect':
+        return prefix + '"$mp" --version\n"$mp" agents\n'
+    if action == 'native-setup':
+        address = 'url=http://127.0.0.1:%s' % profile['remotePort']
+        return prefix + ('if ! "$mp" healthcheck; then\n'
+            '  "$mp" daemon install || { echo "无法安装服务；请先在服务器运行 magpie serve，再重试。" >&2; exit 1; }\n'
+            '  "$mp" daemon start\nfi\n'
+            'if "$mp" provider ' + shlex.quote(provider) + ' >/dev/null 2>&1; then\n'
+            '  "$mp" provider set ' + shlex.join([provider, address, 'key=magpie-ssh']) + '\n'
+            'else\n  "$mp" provider add ' + shlex.join(['remote-magpie', 'magpie-ssh', address, 'id=' + provider]) + '\nfi\n'
+            '"$mp" provider refresh ' + shlex.quote(provider) + '\n'
+            '"$mp" healthcheck\n')
+    if action not in ('native-apply', 'native-restore'):
+        raise ValueError('未知 Magpie 操作')
+    if not isinstance(agent, str) or not AGENT_ID.fullmatch(agent) or agent in ('provider', 'plugin', 'daemon', 'serve', 'web', 'update', 'restore', 'rm'):
+        raise ValueError('请填写有效的 Magpie agent ID，例如 omp、pi、dsh、codex')
+    value = 'default' if action == 'native-restore' else provider + '/' + profile['model']
+    # Magpie's help is side-effect free. Require an agent's model field rather
+    # than treating an arbitrary top-level Magpie command as an agent ID.
+    check = ('"$mp" ' + shlex.quote(agent) + ' --help | grep -Eq \'^fields:.*model\' || '
+             '{ echo "该 ID 不是支持 model 字段的 Magpie agent；请查看本体帮助。" >&2; exit 1; }\n')
+    return prefix + check + '"$mp" ' + shlex.join([agent, value]) + '\n'
 
 
 def atomic_json(path, data):
@@ -99,6 +132,7 @@ class Manager:
         self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {'profiles': []}
         self.state['profiles'] = [validate_profile(p) for p in self.state['profiles']]
         self.processes, self.statuses, self.retry, self.handles = {}, {}, {}, {}
+        self.native_reports = {}
         # Keep Unix-domain socket paths below macOS's length limit.
         digest = hashlib.sha256(str(self.config).encode()).hexdigest()[:10]
         self.sockets = Path('/tmp') / ('magpie-ssh-%s-%s' % (os.getuid(), digest))
@@ -131,11 +165,11 @@ class Manager:
             catalog = json.load(response)
         return [m['id'] for m in catalog['data']]
 
-    def ssh(self, p, command=None, input_text=None):
+    def ssh(self, p, command=None, input_text=None, timeout=25):
         argv = ssh_args(p, self.socket(p)) + [p['host']]
         if command is not None:
             argv += [command]
-        result = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=25)
+        result = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout)
         if result.returncode:
             raise RuntimeError((result.stderr.strip() or result.stdout.strip() or 'SSH 操作失败')[-1500:])
         return result.stdout
@@ -224,6 +258,8 @@ class Manager:
         except Exception as error:
             models, model_error = [], str(error)
         return {'profiles': self.state['profiles'], 'statuses': self.statuses,
+                'helperVersion': '0.2.0',
+                'nativeReports': self.native_reports,
                 'hosts': list(dict.fromkeys(hosts)), 'models': models, 'modelError': model_error,
                 'helperPid': os.getpid(), 'at': time.time()}
 
@@ -260,8 +296,19 @@ class Manager:
             self.stop(p)
             self.state['profiles'].remove(p)
             self.statuses.pop(p['id'], None)
+            self.native_reports.pop(p['id'], None)
             self.save()
             return '服务器配置已删除'
+        if action in ('native-inspect', 'native-setup', 'native-apply', 'native-restore'):
+            if action in ('native-setup', 'native-apply') and self.statuses.get(p['id'], {}).get('state') != 'connected':
+                raise ValueError('请先连接隧道，再接入远端 Magpie')
+            script = native_script(action, p, request.get('agent'))
+            # Provider refresh / native service startup can take longer than a probe.
+            result = self.ssh(p, 'sh -s', script, timeout=55).strip()
+            self.native_reports[p['id']] = result[-20000:]
+            if action == 'native-apply':
+                return '已由服务器 Magpie 的原生适配器完成接入。按本体提示重启对应 agent；之后直接运行原 agent 命令。\n' + result[-4000:]
+            return result[-6000:] or '已完成'
         if action in ('install', 'uninstall'):
             if action == 'install':
                 if self.statuses.get(p['id'], {}).get('state') != 'connected':

@@ -8,30 +8,32 @@ A local [Magpie](https://usemagpie.ai/) plugin that makes your desktop's models 
 
 ## What it does
 
-- Adds an **SSH Remote** page to Magpie.
-- Saves multiple SSH servers and uses your existing SSH keys, aliases and `ProxyJump` settings.
-- Opens a reverse tunnel from server loopback to your local Magpie gateway, verifies it from the server, and retries lost connections every 15 seconds.
-- Installs optional `codex-magpie` and `claude-magpie` launchers on the server, with a model you select.
-- Removes only launchers bearing this plugin's marker; unrelated files and agent configuration are preserved.
+The plugin manages SSH connectivity and **reuses Magpie's native agent adapters on the server**. It does not implement one configuration writer per agent.
 
 ```text
-Remote Codex / Claude Code
+Remote agent (pi / omp / dsh / Codex / any CLI-configurable Magpie agent)
+    → server Magpie (native agent adapter)
+    → Remote magpie provider
     → server 127.0.0.1:13425
-    → encrypted SSH tunnel
-    → desktop 127.0.0.1:3425
-    → Magpie → your model provider
+    → SSH reverse tunnel
+    → desktop Magpie 127.0.0.1:3425 → your providers
 ```
 
-The server does not need its own Magpie installation. Your desktop must stay online with Magpie running.
+- Save multiple SSH servers, with your existing keys, aliases and ProxyJump.
+- Verify the tunnel from the server and retry lost connections every 15 seconds.
+- Inspect the server's supported agents using `magpie agents`.
+- Add the desktop gateway as a Remote magpie provider on the server.
+- Configure **any agent exposing a native `model` field** using the same generic CLI call; restore with Magpie's own `default` operation.
+- Support new agents by updating server Magpie, without adding plugin adapters.
 
 ## Requirements
 
-- macOS or Linux desktop with Magpie, Python 3.9+, and OpenSSH. Windows is currently unsupported.
-- Magpie's plugin host runtime (Bun, managed by Magpie).
-- A server reachable with noninteractive SSH key authentication, allowing reverse TCP forwarding.
-- `curl` and a POSIX shell on the server; Codex or Claude Code installed there if you want its launcher.
+- macOS or Linux desktop with Magpie, Python 3.9+ and OpenSSH. Windows is unsupported.
+- Magpie and curl installed on the server, plus any agents you want to configure.
+- Noninteractive SSH authentication and reverse TCP forwarding enabled.
+- Server Magpie's gateway must stay running. Setup uses its native `daemon install` / `daemon start` commands if no gateway is running; if the server lacks a working user service manager, run `magpie serve` yourself before setup.
 
-The local plugin was verified with Magpie **0.1.1600** on macOS. Linux compatibility is covered by the test workflow, but a live Linux desktop installation has not been verified.
+The local plugin was verified with Magpie 0.1.1600 on macOS. Tests run on macOS and Linux. Actual agent availability and behavior depend on the server's installed Magpie version and native adapters.
 
 ## Install
 
@@ -39,48 +41,45 @@ The local plugin was verified with Magpie **0.1.1600** on macOS. Linux compatibi
 magpie plugin add github:cliecy/magpie-ssh-remote
 ```
 
-Alternatively, clone and install the folder:
+Or install a local checkout:
 
 ```sh
 git clone https://github.com/cliecy/magpie-ssh-remote.git
 magpie plugin add "$(pwd)/magpie-ssh-remote"
 ```
 
-On macOS, if `magpie` is not on your PATH, use `/Applications/magpie.app/Contents/MacOS/magpie` instead.
-
-Open **Plugins → SSH Remote** in Magpie's sidebar. Keep the folder in place if you installed a local checkout. Install either the GitHub package or the local checkout, rather than both.
+On macOS, if `magpie` is not on PATH, use `/Applications/magpie.app/Contents/MacOS/magpie`. Open **Plugins → SSH Remote**. Install either the GitHub package or local checkout, rather than both.
 
 ## Use
 
-1. Connect to your server once in a normal terminal, for example `ssh my-server`, to verify its host fingerprint and key authentication.
-2. In **SSH Remote**, add the SSH alias or `user@host`, choose a model, and save.
-3. Click **Connect**, then **Refresh status** to check the result.
-4. Optionally click **Install / Update** beside Codex or Claude Code.
-5. On the server, inside your project, run:
+1. SSH to the server once in a terminal to verify its fingerprint and key authentication. Install Magpie there using the [official instructions](https://usemagpie.ai/docs/start).
+2. Add the SSH alias / `user@host` in SSH Remote, choose the desktop model and save.
+3. **Connect**, then **Refresh status** to confirm connectivity.
+4. **Inspect Magpie and agents** to read the supported-agent report from the server.
+5. **Configure / start remote Magpie** to register the desktop provider and start the native gateway if necessary.
+6. Enter a native agent ID such as `omp`, `pi`, `dsh`, `codex`, `claude` or another supported ID, then **Connect selected model**.
+7. Follow Magpie's restart instructions. Launch the agent with its ordinary command.
 
-   ```sh
-   ~/.local/bin/codex-magpie
-   # or
-   ~/.local/bin/claude-magpie
-   ```
-
-Additional arguments pass through to the agent:
+The same generic operation invokes:
 
 ```sh
-~/.local/bin/codex-magpie -C /path/to/project
+magpie <agent-id> ssh-desktop-<profile-id>/<selected-desktop-model>
 ```
 
-Choose a complete model ID from the model list, such as `group/default`. After changing the model or port, save, reconnect, and reinstall the launcher. Each server has one launcher per agent; installing from a different profile updates that launcher's settings.
+The adapter, configuration format, backup and restoration behavior all belong to **server Magpie**. To restore, select the agent and use **Restore through Magpie**, which delegates to `magpie <agent-id> default`. Agents requiring interactive GUI import or without a CLI `model` field must be configured through the server Magpie UI instead.
 
-## Lifecycle and limitations
+Changing the profile model does not automatically rewrite previously configured agents; click Connect selected model again for each agent you want to change. The suggestions list is only a convenience; it is not an allowlist.
 
-- **Disconnect** stops retrying. Saving edits disconnects the existing tunnel.
-- Turning off or removing the plugin stops the helper and its tunnels. Existing enabled profiles reconnect when the plugin starts again.
-- The helper exits after the default Magpie gateway has been unavailable for over 30 seconds.
-- The UI shows the latest requested snapshot. Click **Refresh status** for current connection information.
-- This version installs separate launch commands. It does not change how a plain `codex` or `claude` invocation is configured.
-- The desktop loopback gateway currently accepts the client marker keys used by the launchers. A deployment that requires real gateway keys needs additional configuration support.
-- Live forwarding and inference against a user's server still need to be verified on that server. The tests exercise process control and generated shell scripts without contacting a real server.
+## Lifecycle and migration
+
+- Disconnect stops the tunnel and its retries. Saving edits disconnects it.
+- Disabling/removing the plugin stops its helper and tunnels. Enabled profiles reconnect when it starts again.
+- The helper exits after the desktop gateway is unavailable for over 30 seconds.
+- State shown in the UI is a snapshot; use Refresh status for current information.
+- Disconnecting a tunnel does not remove the server provider, restore agents or stop server Magpie's service. Restore agents explicitly while the server is reachable.
+- No upstream provider credentials are copied. Requests still require this desktop to stay online.
+- Version 0.1's `codex-magpie` / `claude-magpie` launchers are legacy. The 0.2 UI uses native Magpie configuration and ordinary agent commands. Existing launchers are not deleted automatically; the backend retains their install/remove protocol for older open pages.
+- The default desktop loopback gateway accepts the client marker used by the Remote magpie provider. Setups requiring an explicit gateway key need additional key-configuration support.
 
 ## Security and local data
 
@@ -107,7 +106,7 @@ These variables must be visible to the process that starts Magpie. Server config
 
 ## Remove
 
-Remove remote launchers with the page's **Remove** buttons first if you no longer need them. Then remove the plugin:
+Use **Restore through Magpie** for agents you want to disconnect first. Then remove the plugin:
 
 ```sh
 magpie plugin rm magpie-ssh-remote
@@ -126,32 +125,23 @@ node --check index.mjs
 node --check page/app.js
 ```
 
-Tests cover shell quoting, remote launcher install/update/remove, protection of existing files and symlinks, reconnect handling, stale UI requests, and local/GitHub installation spec resolution. CI runs them on macOS and Linux.
+Tests cover generic native Magpie setup, idempotent provider updates, agent help validation, configuration and restoration (including a future agent ID), reconnect handling, stale UI requests, GitHub install resolution and legacy launcher compatibility. CI runs them on macOS and Linux.
 
-Manual frontend validation used Magpie's official page bridge inside a browser sandbox, including save, snapshot, install preconditions and delete. A Magpie test instance can still discover real agents even with a separate configuration directory; do not treat `XDG_CONFIG_HOME` alone as complete agent isolation.
+The original frontend flow was validated with Magpie's official page bridge in a browser sandbox. The native adapter controls are additionally checked with a mock backend; no live server is changed by that UI check. A Magpie test instance can still discover real agents even with a separate configuration directory; do not treat `XDG_CONFIG_HOME` alone as complete agent isolation.
 
 See the [Magpie plugin documentation](https://usemagpie.ai/docs/plugins) for the page and host APIs.
 
 ## 中文说明
 
-这是一个可从本地文件夹或 GitHub 安装的 Magpie 插件，用 SSH 反向隧道让服务器上的 agent 使用你电脑上的 Magpie。
+SSH 远端接入通过服务器上的 Magpie 本体配置 agent，复用原生适配器，无需为 omp、pi、dsh 等各写一套配置逻辑。本体新增 agent 支持后，升级服务器 Magpie 即可。
 
-```sh
-magpie plugin add github:cliecy/magpie-ssh-remote
-```
+使用步骤：服务器先安装 Magpie → 建立隧道 → 检测本体及 agent → 配置 / 启动远端 Magpie → 输入任意本体支持的 agent ID → 接入所选模型。接入后按本体提示重启，再直接运行原 agent 命令。
 
-安装后，在 Magpie 左侧打开「**SSH 远端接入**」：
+agent ID 输入框支持任意合法 ID，列出的建议项不是限制。支持范围是服务器 Magpie 原生 CLI 提供 `model` 字段的 agent；需要 GUI 导入的 agent 请通过本体界面操作。「通过本体恢复配置」调用原生 `default` 恢复机制。
 
-1. 新建服务器，填写 SSH 别名或 `user@host`，选择模型并保存。
-2. 点击「连接」，再刷新状态确认。
-3. 为 Codex 或 Claude Code 点击「安装 / 更新」。
-4. 在服务器项目目录运行 `~/.local/bin/codex-magpie` 或 `~/.local/bin/claude-magpie`。
+断开隧道不会自动恢复 agent、移除服务器 provider 或停止本体服务。模型仍由本机 Magpie 提供，Mac 需持续联网。共享服务器的其他本机用户可能访问回环端口，请仅连接可信服务器。
 
-沿用已有的 SSH 密钥与跳板机配置，断线后自动重连。服务器无需安装 Magpie，但需要 `curl` 及对应 agent。首次请先在终端 SSH 登录并确认指纹；插件不会自动接受未知主机。
-
-原 agent 配置保留，通过独立启动命令接入。修改模型后需保存、重新连接并更新启动命令。Mac 需要保持联网，Magpie 持续运行。共享服务器的其他用户可能访问回环端口，请仅连接你信任的服务器。
-
-目前支持 macOS / Linux，Windows 暂不支持。已验证本地插件加载、助手通信和页面流程；真实服务器转发与推理需在目标服务器上验证。
+0.1 版的独立启动命令是旧版兼容方式，0.2 版界面已改为本体原生接入。
 
 ## License
 

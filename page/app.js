@@ -10,8 +10,11 @@ function notice(message, error = false) {
 }
 function updateButtons() {
   document.querySelectorAll('button').forEach(button => { button.disabled = busy; });
-  for (const id of ['connect', 'disconnect', 'delete', 'install-codex', 'install-claude', 'uninstall-codex', 'uninstall-claude']) {
+  for (const id of ['connect', 'disconnect', 'delete', 'native-inspect', 'native-setup', 'native-apply', 'native-restore']) {
     $(id).disabled = busy || !selected;
+  }
+  for (const id of ['native-inspect', 'native-setup', 'native-apply', 'native-restore']) {
+    $(id).disabled = busy || !selected || !snapshot.helperVersion;
   }
 }
 function fill(profile) {
@@ -48,6 +51,8 @@ function render() {
   }
   const profile = snapshot.profiles.find(p => p.id === selected);
   const status = snapshot.statuses[selected];
+  $('native-report').textContent = !snapshot.helperVersion ? '当前后台助手仍是旧版。请在 Magpie 插件管理中关闭再开启本插件，使升级生效；这会短暂断开并自动重连当前隧道。' :
+    snapshot.nativeReports?.[selected] || '检测后在这里显示服务器 Magpie 支持的 agent。列表由本体提供。';
   $('connection').textContent = profile ?
     `${status?.message || '尚未连接'}\n服务器 127.0.0.1:${profile.remotePort} → 本机 127.0.0.1:${profile.localPort}` : '保存后即可连接。';
   $('connection').style.whiteSpace = 'pre-wrap';
@@ -99,10 +104,8 @@ $('connect').onclick = async () => {
 };
 $('disconnect').onclick = () => request('disconnect', { profileId: selected });
 $('delete').onclick = async () => { if (await request('delete', { profileId: selected })) fill(null); };
-for (const agent of ['codex', 'claude']) {
-  for (const action of ['install', 'uninstall']) {
-    $(`${action}-${agent}`).onclick = () => request(action, { profileId: selected, agent });
-  }
+for (const action of ['native-inspect', 'native-setup', 'native-apply', 'native-restore']) {
+  $(action).onclick = () => request(action, { profileId: selected, agent: $('native-agent').value.trim() });
 }
 
 (async () => {

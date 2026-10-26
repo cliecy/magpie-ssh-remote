@@ -1,6 +1,6 @@
 {
   "name": "magpie-ssh-remote",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "author": "cliecy",
@@ -11,7 +11,7 @@
   "homepage": "https://github.com/cliecy/magpie-ssh-remote#readme",
   "bugs": "https://github.com/cliecy/magpie-ssh-remote/issues",
   "keywords": ["magpie-plugin", "ssh", "reverse-tunnel", "codex", "claude-code"],
-  "description": "Manage SSH reverse tunnels and remote agent launchers from Magpie",
+  "description": "Manage SSH tunnels and delegate remote agent setup to Magpie's native adapters",
   "type": "module",
   "main": "index.mjs",
   "magpie": {
