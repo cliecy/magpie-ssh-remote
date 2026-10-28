@@ -1,4 +1,4 @@
-Magpie SSH 远端接入 v0.2.0
+Magpie SSH 远端接入 v0.2.1
 
 改为复用服务器 Magpie 原生 agent 适配器。
 

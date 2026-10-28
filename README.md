@@ -125,7 +125,7 @@ node --check index.mjs
 node --check page/app.js
 ```
 
-Tests cover generic native Magpie setup, idempotent provider updates, agent help validation, configuration and restoration (including a future agent ID), reconnect handling, stale UI requests, GitHub install resolution and legacy launcher compatibility. CI runs them on macOS and Linux.
+Tests cover generic native Magpie setup, idempotent provider updates, agent help validation, configuration and restoration (including a future agent ID), reconnect handling, gateway port selection, corrupt state recovery, response republishing, stale UI requests, GitHub install resolution and legacy launcher compatibility. CI runs them on macOS and Linux.
 
 The original frontend flow was validated with Magpie's official page bridge in a browser sandbox. The native adapter controls are additionally checked with a mock backend; no live server is changed by that UI check. A Magpie test instance can still discover real agents even with a separate configuration directory; do not treat `XDG_CONFIG_HOME` alone as complete agent isolation.
 

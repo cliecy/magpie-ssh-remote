@@ -109,6 +109,81 @@ class PluginTests(unittest.TestCase):
             stop.assert_called_once()
             self.assertFalse(manager.state['profiles'][0]['enabled'])
 
+    def test_corrupt_state_file_is_backed_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'magpie'
+            runtime = config / 'ssh-remote'
+            runtime.mkdir(parents=True)
+            (runtime / 'state.json').write_text('{broken json')
+            with patch('builtins.print'):
+                manager = self.manager(directory)
+            self.assertEqual(manager.state['profiles'], [])
+            self.assertTrue((runtime / 'state.bad').exists())
+
+    def test_invalid_profile_is_skipped_instead_of_killing_the_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / 'magpie'
+            runtime = config / 'ssh-remote'
+            runtime.mkdir(parents=True)
+            (runtime / 'state.json').write_text(json.dumps(
+                {'profiles': [dict(profile(), id='short'), profile()]}))
+            with patch('builtins.print'):
+                manager = self.manager(directory)
+            self.assertEqual([p['id'] for p in manager.state['profiles']], ['ab0123456789abcd'])
+
+    def test_publish_failure_is_retried_without_rehandling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory)
+            handled, published = [], []
+
+            def flaky_publish(request_id, result, error=''):
+                published.append(request_id)
+                if len(published) == 1:
+                    raise RuntimeError('plugins.json busy')
+
+            entries = [{'options': {'request': {'id': 'r1'}}},
+                       {'options': {'request': {'id': 'r1'}}}]
+            with patch.object(manager, 'entry', side_effect=entries + [SystemExit]), \
+                 patch.object(manager, 'handle', side_effect=lambda request: handled.append(request) or 'ok'), \
+                 patch.object(manager, 'publish', side_effect=flaky_publish), \
+                 patch.object(manager, 'monitor'), \
+                 patch.object(manager, 'gateway_alive', return_value=True), \
+                 patch.object(w.time, 'sleep'), \
+                 patch('builtins.print'):
+                with self.assertRaises(SystemExit):
+                    manager.loop()
+            self.assertEqual(handled, [{'id': 'r1'}])
+            self.assertEqual(published, ['r1', 'r1'])
+
+    def test_gateway_ports_follow_enabled_profiles_then_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory)
+            other = profile(); other['id'] = 'cd0123456789ef01'; other['localPort'] = 4000
+            manager.state['profiles'] = [profile(), other]
+            self.assertEqual(manager.gateway_ports(), [3425, 4000])
+            other['enabled'] = True
+            self.assertEqual(manager.gateway_ports(), [4000, 3425])
+
+    def test_gateway_and_catalog_use_the_configured_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = self.manager(directory)
+            p = profile(); p['localPort'] = 4000
+            manager.state['profiles'] = [p]
+            checked = []
+
+            def models(port):
+                checked.append(port)
+                if port != 4000:
+                    raise RuntimeError('connection refused')
+                return ['m1']
+
+            with patch.object(manager, 'local_models', side_effect=models):
+                self.assertTrue(manager.gateway_alive())
+                self.assertEqual(manager.catalog(), (['m1'], ''))
+            self.assertEqual(checked, [4000, 4000])
+            with patch.object(manager, 'local_models', side_effect=RuntimeError('down')):
+                self.assertFalse(manager.gateway_alive())
+
     def test_install_requires_live_connection(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = self.manager(directory); p = profile(); manager.state['profiles'] = [p]

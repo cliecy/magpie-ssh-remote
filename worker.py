@@ -129,13 +129,34 @@ class Manager:
         self.runtime = self.config / 'ssh-remote'
         self.runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.state_file = self.runtime / 'state.json'
-        self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {'profiles': []}
-        self.state['profiles'] = [validate_profile(p) for p in self.state['profiles']]
+        self.state = {'profiles': []}
+        if self.state_file.exists():
+            try:
+                loaded = json.loads(self.state_file.read_text())
+                if isinstance(loaded, dict):
+                    self.state.update(loaded)
+            except ValueError as error:
+                os.replace(self.state_file, self.state_file.with_suffix('.bad'))
+                print(time.strftime('%Y-%m-%d %H:%M:%S'), 'state.json 无法解析，已备份为 state.bad：', error, flush=True)
+        if not isinstance(self.state.get('profiles'), list):
+            self.state['profiles'] = []
+        kept = []
+        for p in self.state['profiles']:
+            try:
+                kept.append(validate_profile(p))
+            except ValueError as error:
+                # One bad entry must not stop the worker and every tunnel with it.
+                print(time.strftime('%Y-%m-%d %H:%M:%S'), '忽略无效服务器配置：', error, flush=True)
+        self.state['profiles'] = kept
         self.processes, self.statuses, self.retry, self.handles = {}, {}, {}, {}
         self.native_reports = {}
-        # Keep Unix-domain socket paths below macOS's length limit.
+        # Prefer the user-private runtime dir; /tmp keeps Unix-domain socket
+        # paths below macOS's length limit.
         digest = hashlib.sha256(str(self.config).encode()).hexdigest()[:10]
-        self.sockets = Path('/tmp') / ('magpie-ssh-%s-%s' % (os.getuid(), digest))
+        base = os.environ.get('XDG_RUNTIME_DIR')
+        if not base or not os.path.isdir(base):
+            base = '/tmp'
+        self.sockets = Path(base) / ('magpie-ssh-%s-%s' % (os.getuid(), digest))
         self.sockets.mkdir(mode=0o700, exist_ok=True)
         info = self.sockets.lstat()
         if self.sockets.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -165,6 +186,30 @@ class Manager:
             catalog = json.load(response)
         return [m['id'] for m in catalog['data']]
 
+    def gateway_ports(self):
+        """Candidate gateway ports: enabled profiles first, then the rest, then the default."""
+        enabled = [p['localPort'] for p in self.state['profiles'] if p.get('enabled')]
+        others = [p['localPort'] for p in self.state['profiles'] if not p.get('enabled')]
+        return list(dict.fromkeys(enabled + others + [3425]))
+
+    def gateway_alive(self):
+        for port in self.gateway_ports():
+            try:
+                self.local_models(port)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def catalog(self):
+        model_error = '本机网关不可达'
+        for port in self.gateway_ports():
+            try:
+                return self.local_models(port), ''
+            except Exception as error:
+                model_error = str(error)
+        return [], model_error
+
     def ssh(self, p, command=None, input_text=None, timeout=25):
         argv = ssh_args(p, self.socket(p)) + [p['host']]
         if command is not None:
@@ -184,8 +229,11 @@ class Manager:
                 proc.kill()
                 proc.wait()
         if self.socket(p).exists():
-            subprocess.run(ssh_args(p, self.socket(p)) + ['-O', 'exit', p['host']],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
+            try:
+                subprocess.run(ssh_args(p, self.socket(p)) + ['-O', 'exit', p['host']],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         handle = self.handles.pop(p['id'], None)
         if handle:
             handle.close()
@@ -198,9 +246,9 @@ class Manager:
         self.stop(p)
         self.local_models(p['localPort'])
         logfile = self.runtime / (p['id'] + '.log')
-        log = open(logfile, 'w')
-        os.chmod(str(logfile), 0o600)
-        self.handles[p['id']] = log
+        descriptor = os.open(str(logfile), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(descriptor, 0o600)
+        self.handles[p['id']] = os.fdopen(descriptor, 'w')
         argv = ssh_args(p, self.socket(p)) + ['-M', '-NT', '-o', 'ControlPersist=no',
                 '-o', 'ExitOnForwardFailure=yes', '-R', '127.0.0.1:%s:127.0.0.1:%s' %
                 (p['remotePort'], p['localPort']), p['host']]
@@ -233,6 +281,9 @@ class Manager:
                 if proc is None and time.time() >= self.retry.get(identity, 0):
                     self.start(p)
                 elif proc is not None and status.get('state') == 'connecting':
+                    if time.time() - status.get('checked', 0) < 3:
+                        continue
+                    status['checked'] = time.time()
                     checked = subprocess.run(ssh_args(p, self.socket(p)) + ['-O', 'check', p['host']],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
                     if checked.returncode == 0:
@@ -254,11 +305,11 @@ class Manager:
                 if parts and parts[0].lower() == 'host':
                     hosts += [h for h in parts[1:] if HOST.fullmatch(h) and '*' not in h and '?' not in h]
         try:
-            models, model_error = self.local_models(), ''
+            models, model_error = self.catalog()
         except Exception as error:
             models, model_error = [], str(error)
         return {'profiles': self.state['profiles'], 'statuses': self.statuses,
-                'helperVersion': '0.2.0',
+                'helperVersion': '0.2.1',
                 'nativeReports': self.native_reports,
                 'hosts': list(dict.fromkeys(hosts)), 'models': models, 'modelError': model_error,
                 'helperPid': os.getpid(), 'at': time.time()}
@@ -281,7 +332,8 @@ class Manager:
         p = self.profile(request.get('profileId'))
         if action == 'connect':
             for other in self.state['profiles']:
-                if other['id'] != p['id'] and other.get('enabled') and other['host'] == p['host'] and other['remotePort'] == p['remotePort']:
+                same_host = other['host'].split('@')[-1].lower() == p['host'].split('@')[-1].lower()
+                if other['id'] != p['id'] and other.get('enabled') and same_host and other['remotePort'] == p['remotePort']:
                     raise ValueError('同一主机的远端端口已被另一配置使用')
             p['enabled'] = True
             self.save()
@@ -347,7 +399,7 @@ class Manager:
         lock.truncate()
         lock.write(str(os.getpid()))
         lock.flush()
-        last_id, gateway_down = None, None
+        last_id, gateway_down, pending = None, None, None
         quitting = [False]
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: quitting.__setitem__(0, True))
@@ -364,16 +416,21 @@ class Manager:
                     if request_id and request_id != last_id and request_id != response.get('id'):
                         last_id = request_id
                         try:
-                            result, error = self.handle(request), ''
+                            pending = (request_id, self.handle(request), '')
                         except Exception as exc:
-                            result, error = '', str(exc)
-                        self.publish(request_id, result, error)
+                            pending = (request_id, '', str(exc))
+                    # A failed write to plugins.json must not silently drop the response.
+                    if pending is not None:
+                        try:
+                            self.publish(*pending)
+                            pending = None
+                        except Exception as exc:
+                            print(time.strftime('%Y-%m-%d %H:%M:%S'), str(exc), flush=True)
                     self.monitor()
                     # Shut down owned SSH children when Magpie's gateway exits.
-                    try:
-                        self.local_models()
+                    if self.gateway_alive():
                         gateway_down = None
-                    except Exception:
+                    else:
                         gateway_down = gateway_down or time.time()
                         if time.time() - gateway_down > 30:
                             break
